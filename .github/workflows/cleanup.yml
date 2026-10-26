@@ -34,6 +34,9 @@ jobs:
           for f in out:
               if not f.startswith("posts/"):
                   continue
+              # 只清圖片，.json 的文案備份永久保留
+              if not f.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+                  continue
               try:
                   t = datetime.datetime.fromtimestamp(os.path.getmtime(f))
               except OSError:
