@@ -1,13 +1,14 @@
 name: cleanup-media
 
 # 這個 repo 只是「貼文發布前的雲端暫存」，不是倉庫。
-# 小羅 2026-10-26 定案：**發完就刪乾淨，不要讓雲端越長越肥**（本機有自己的歸檔可查）。
-# 做法：每小時跑一次，刪掉「檔名時間已過 2 小時」的所有檔案（圖＋文案 json 都刪）。
-#   檔名規則：ig-MMDD-HHMM.jpg / th-MMDD-HHMM.json → 時間一過就清掉
-#   ⚠️ 留 2 小時 buffer：避免發布延遲／重試時圖已經被刪掉。
+# 小羅 2026-10-26 定案：
+#   ① 每天只跑一次（凌晨 04:20）——不要頻繁觸發，省免費額度
+#   ② 時間到就統一刪除：圖片、文案、留言、關鍵字…posts/ 底下**全部檔案都刪**（不是只刪圖片）
+#   ③ 還沒到時間的（檔名時間在未來）保留，避免誤刪未發布的
+#   ④ 不做其他功能（本機有自己的歸檔可查）
 on:
   schedule:
-    - cron: '15 * * * *'      # 每小時 15 分
+    - cron: '20 20 * * *'   # UTC 20:20 = 台北 04:20
   workflow_dispatch:
 
 permissions:
@@ -18,12 +19,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: 刪除已發布（時間已過）的暫存檔
+      - name: 刪除時間已到的暫存檔（全部類型）
         run: |
           python3 - <<'EOF'
           import os, re, subprocess, datetime
           now = datetime.datetime.now()
-          cut = now - datetime.timedelta(hours=2)
           files = subprocess.run(["git", "ls-files"], capture_output=True, text=True).stdout.split()
           gone = []
           for f in files:
@@ -31,16 +31,21 @@ jobs:
                   continue
               m = re.search(r"-(\d{2})(\d{2})-(\d{2})(\d{2})\.", f)
               if not m:
+                  # 檔名沒有時間戳 → 用檔案時間，超過 2 天就刪
+                  try:
+                      if datetime.datetime.fromtimestamp(os.path.getmtime(f)) < now - datetime.timedelta(days=2):
+                          gone.append(f)
+                  except OSError:
+                      pass
                   continue
               mm, dd, hh, mi = map(int, m.groups())
-              year = now.year
               try:
-                  t = datetime.datetime(year, mm, dd, hh, mi)
+                  t = datetime.datetime(now.year, mm, dd, hh, mi)
               except ValueError:
                   continue
               if t - datetime.timedelta(days=200) > now:   # 跨年保護
-                  t = t.replace(year=year - 1)
-              if t < cut:
+                  t = t.replace(year=now.year - 1)
+              if t <= now:
                   gone.append(f)
           for f in gone:
               os.remove(f)
@@ -51,17 +56,5 @@ jobs:
           git config user.name "pi-agent"
           git config user.email "a42599@gmail.com"
           git add -A
-          git diff --quiet --cached || git commit -m "chore: 發完就刪（雲端不留資料）"
+          git diff --quiet --cached || git commit -m "chore: 每日統一刪除（時間已到的暫存檔全刪）"
           git push
-      - name: 歷史壓縮（避免 repo 因 git 歷史越長越肥）
-        run: |
-          N=$(git rev-list --count HEAD)
-          echo "commits=$N"
-          if [ "$N" -gt 20 ]; then
-            git checkout --orphan clean_tmp
-            git add -A
-            git commit -m "chore: squash history（保持倉庫小）"
-            git branch -D main || true
-            git branch -m main
-            git push -f origin main
-          fi
