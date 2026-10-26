@@ -53,3 +53,15 @@ jobs:
           git add -A
           git diff --quiet --cached || git commit -m "chore: 發完就刪（雲端不留資料）"
           git push
+      - name: 歷史壓縮（避免 repo 因 git 歷史越長越肥）
+        run: |
+          N=$(git rev-list --count HEAD)
+          echo "commits=$N"
+          if [ "$N" -gt 20 ]; then
+            git checkout --orphan clean_tmp
+            git add -A
+            git commit -m "chore: squash history（保持倉庫小）"
+            git branch -D main || true
+            git branch -m main
+            git push -f origin main
+          fi
