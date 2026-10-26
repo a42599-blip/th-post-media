@@ -1,15 +1,14 @@
 name: cleanup-media
 
-# 這個 repo 只當「本專案的貼文圖暫存庫」：發布過的圖不要一直累積。
-# 每天清掉超過 DAYS 天的檔案，保留最新一天的量給還沒發布的排程。
+# 這個 repo 只是「貼文發布前的雲端暫存」，不是倉庫。
+# 小羅 2026-10-26 定案：**發完就刪乾淨，不要讓雲端越長越肥**（本機有自己的歸檔可查）。
+# 做法：每小時跑一次，刪掉「檔名時間已過 2 小時」的所有檔案（圖＋文案 json 都刪）。
+#   檔名規則：ig-MMDD-HHMM.jpg / th-MMDD-HHMM.json → 時間一過就清掉
+#   ⚠️ 留 2 小時 buffer：避免發布延遲／重試時圖已經被刪掉。
 on:
   schedule:
-    - cron: '25 20 * * *'   # 每天 04:25（台北時間）
+    - cron: '15 * * * *'      # 每小時 15 分
   workflow_dispatch:
-    inputs:
-      days:
-        description: '保留幾天'
-        default: '1'
 
 permissions:
   contents: write
@@ -19,38 +18,38 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: 刪除過期暫存圖
-        env:
-          DAYS: ${{ github.event.inputs.days || '1' }}
+      - name: 刪除已發布（時間已過）的暫存檔
         run: |
           python3 - <<'EOF'
-          import os, subprocess, datetime
-          days = int(os.environ.get("DAYS", "1"))
-          cut = datetime.datetime.now() - datetime.timedelta(days=days)
-          out = subprocess.run(["git", "ls-files"], capture_output=True, text=True).stdout.split()
+          import os, re, subprocess, datetime
+          now = datetime.datetime.now()
+          cut = now - datetime.timedelta(hours=2)
+          files = subprocess.run(["git", "ls-files"], capture_output=True, text=True).stdout.split()
           gone = []
-          for f in out:
+          for f in files:
               if not f.startswith("posts/"):
                   continue
-              # 只清圖片，.json 的文案備份永久保留
-              if not f.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+              m = re.search(r"-(\d{2})(\d{2})-(\d{2})(\d{2})\.", f)
+              if not m:
                   continue
+              mm, dd, hh, mi = map(int, m.groups())
+              year = now.year
               try:
-                  t = datetime.datetime.fromtimestamp(os.path.getmtime(f))
-              except OSError:
+                  t = datetime.datetime(year, mm, dd, hh, mi)
+              except ValueError:
                   continue
+              if t - datetime.timedelta(days=200) > now:   # 跨年保護
+                  t = t.replace(year=year - 1)
               if t < cut:
                   gone.append(f)
           for f in gone:
               os.remove(f)
-          print("deleted", len(gone))
+          print("deleted", len(gone), "files")
           EOF
       - name: Commit
         run: |
           git config user.name "pi-agent"
           git config user.email "a42599@gmail.com"
           git add -A
-          git diff --quiet --cached || git commit -m "chore: 自動清理過期貼文圖"
+          git diff --quiet --cached || git commit -m "chore: 發完就刪（雲端不留資料）"
           git push
